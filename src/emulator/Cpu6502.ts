@@ -16,6 +16,20 @@ enum FLAGS6502 {
 class Cpu6502 {
 
     private bus: Bus | undefined;
+    public a: number = (0x00); //accumulator register
+    public x: number = (0x00); //x register
+    public y: number = (0x00); //y register
+    public stkp: number = (0x00); //stack pointer (points to location on bus)
+    public pc: number = (0x0000); //program counter
+    public status: number = (0x00); //status register
+
+    public fetched: number = (0x00);
+    public addr_abs: number = 0x0000;
+    public addr_rel: number = (0x00);
+    public opcode: number = (0x00);
+    public cycles: number = (0)
+
+    public lookup: Instruction[] = [];
 
     private IMP(): number {
         this.fetched = this.a;
@@ -133,21 +147,6 @@ class Cpu6502 {
             this.addr_rel |= 0xFF00;
         return 0;
     }
-
-    public a: number = (0x00); //accumulator register
-    public x: number = (0x00); //x register
-    public y: number = (0x00); //y register
-    public stkp: number = (0x00); //stack pointer (points to location on bus)
-    public pc: number = (0x0000); //program counter
-    public status: number = (0x00); //status register
-
-    public fetched: number = (0x00);
-    public addr_abs: number = 0x0000;
-    public addr_rel: number = (0x00);
-    public opcode: number = (0x00);
-    public cycles: number = (0)
-
-    public lookup: Instruction[] = [];
 
     constructor() {
         this.lookup = [
@@ -276,11 +275,29 @@ class Cpu6502 {
         return ((this.status & f) > 0) ? 1 : 0
     }
 
-    ADC() {
+    private ADC(): number {
+        this.fetch();
 
+        const temp = this.a + this.fetched + this.getFlag(FLAGS6502.C);
+
+        // The carry flag out exists in the high byte bit 0
+        this.setFlag(FLAGS6502.C, temp > 255);
+
+        // The Zero flag is set if the result is 0
+        this.setFlag(FLAGS6502.Z, (temp & 0x00FF) == 0);
+
+        // The signed Overflow flag is set based on all that up there! :D
+        this.setFlag(FLAGS6502.V, ((~(this.a ^ this.fetched) & (this.a ^ temp)) & 0x0080) > 0);
+
+        // The negative flag is set to the most significant bit of the result
+        this.setFlag(FLAGS6502.N, (temp & 0x80) > 0);
+
+        // Load the result into the accumulator (it's 8-bit dont forget!)
+        this.a = temp & 0x00FF;
+        return 1;
     }
 
-    public AND(): number {
+    private AND(): number {
         this.fetch();
         this.a = this.a & this.fetched;
         this.setFlag(FLAGS6502.Z, this.a === 0x00)
@@ -288,7 +305,7 @@ class Cpu6502 {
         return 1;
     }
 
-    public ASL(): number {
+    private ASL(): number {
         this.fetch()
         const temp = this.fetched << 1
         this.setFlag(FLAGS6502.C, (temp & 0xFF00) > 0)
@@ -303,7 +320,7 @@ class Cpu6502 {
         return 0
     }
 
-    public BCC(): number {
+    private BCC(): number {
         if (this.getFlag(FLAGS6502.C) === 0) {
             this.cycles++;
             this.addr_abs = this.pc + this.addr_rel;
@@ -314,7 +331,7 @@ class Cpu6502 {
         return 0;
     }
 
-    public BCS(): number {
+    private BCS(): number {
         if (this.getFlag(FLAGS6502.C) === 1) {
             this.cycles++;
             this.addr_abs = this.pc + this.addr_rel;
@@ -325,7 +342,7 @@ class Cpu6502 {
         return 0;
     }
 
-    public BEQ(): number {
+    private BEQ(): number {
         if (this.getFlag(FLAGS6502.Z) === 1) {
             this.cycles++;
             this.addr_abs = this.pc + this.addr_rel;
@@ -336,13 +353,16 @@ class Cpu6502 {
         return 0;
     }
 
-    public BIT(): number {
+    private BIT(): number {
         this.fetch()
         const temp = this.a & this.fetched
         this.setFlag(FLAGS6502.Z, (temp & 0x00FF) === 0x00)
+        this.setFlag(FLAGS6502.N, (this.fetched & (1 << 7)) > 0);
+        this.setFlag(FLAGS6502.V, (this.fetched & (1 << 6)) > 0);
+        return 0;
     }
 
-    BMI() {
+    private BMI(): number {
         if (this.getFlag(FLAGS6502.N) === 1) {
             this.cycles++;
             this.addr_abs = this.pc + this.addr_rel;
@@ -353,7 +373,7 @@ class Cpu6502 {
         return 0;
     }
 
-    BNE() {
+    private BNE(): number {
         if (this.getFlag(FLAGS6502.Z) === 0) {
             this.cycles++;
             this.addr_abs = this.pc + this.addr_rel;
@@ -364,7 +384,7 @@ class Cpu6502 {
         return 0;
     }
 
-    BPL() {
+    private BPL(): number {
         if (this.getFlag(FLAGS6502.N) === 0) {
             this.cycles++;
             this.addr_abs = this.pc + this.addr_rel;
@@ -375,10 +395,25 @@ class Cpu6502 {
         return 0;
     }
 
-    BRK() {
+    private BRK(): number {
+        this.pc++;
+
+        this.setFlag(FLAGS6502.I, true);
+        this.write(0x0100 + this.stkp, (this.pc >> 8) & 0x00FF);
+        this.stkp--;
+        this.write(0x0100 + this.stkp, this.pc & 0x00FF);
+        this.stkp--;
+
+        this.setFlag(FLAGS6502.B,  true);
+        this.write(0x0100 + this.stkp, this.status);
+        this.stkp--;
+        this.setFlag(FLAGS6502.B,  false);
+
+        this.pc = this.read(0xFFFE | (this.read(0xFFFF) << 8));
+        return 0;
     }
 
-    BVC() {
+    private BVC() {
         if (this.getFlag(FLAGS6502.V) === 0) {
             this.cycles++;
             this.addr_abs = this.pc + this.addr_rel;
@@ -389,91 +424,254 @@ class Cpu6502 {
         return 0;
     }
 
-    BVS() {
+    private BVS(): number {
+        if (this.getFlag(FLAGS6502.V) === 1) {
+            this.cycles++;
+            this.addr_abs = this.pc + this.addr_rel;
+
+            if ((this.addr_abs & 0xFF00) != (this.pc & 0xFF00)) {
+                this.cycles++;
+            }
+
+            this.pc = this.addr_abs;
+        }
+        return 0;
     }
 
-    CLC() {
+    private CLC(): number {
+        this.setFlag(FLAGS6502.C,  false);
+        return 0;
     }
 
-    CLD() {
+    private CLD(): number {
+        this.setFlag(FLAGS6502.D,  false);
+        return 0;
     }
 
-    CLI() {
+    private CLI(): number {
+        this.setFlag(FLAGS6502.I,  false);
+        return 0;
     }
 
-    CLV() {
+    private CLV(): number {
+        this.setFlag(FLAGS6502.V,  false);
+        return 0;
     }
 
-    CMP() {
+    private CMP(): number {
+        this.fetch();
+        const temp = this.a - this.fetched;
+
+        this.setFlag(FLAGS6502.C, this.a >= this.fetched);
+        this.setFlag(FLAGS6502.Z,  (temp & 0x00FF) == 0x0000);
+        this.setFlag(FLAGS6502.N, (temp & 0x0080) > 0);
+        return 1;
     }
 
-    CPX() {
+    private CPX(): number {
+        this.fetch();
+        const temp = this.x - this.fetched;
+        this.setFlag(FLAGS6502.C,  this.x >= this.fetched);
+        this.setFlag(FLAGS6502.Z,  (temp & 0x00FF) == 0x0000);
+        this.setFlag(FLAGS6502.N,  (temp & 0x0080) > 0);
+        return 0;
     }
 
-    CPY() {
+    private CPY(): number {
+        this.fetch();
+        const temp = this.y - this.fetched;
+        this.setFlag(FLAGS6502.C,  this.y >= this.fetched);
+        this.setFlag(FLAGS6502.Z,  (temp & 0x00FF) == 0x0000);
+        this.setFlag(FLAGS6502.N,  (temp & 0x0080) > 0);
+        return 0;
     }
 
-    DEC() {
+    private DEC(): number {
+        this.fetch();
+        const temp = this.fetched - 1;
+        this.write(this.addr_abs, temp & 0x00FF);
+        this.setFlag(FLAGS6502.Z,  (temp & 0x00FF) == 0x0000);
+        this.setFlag(FLAGS6502.N,  (temp & 0x0080) > 0);
+        return 0;
     }
 
-    DEX() {
+    private DEX(): number {
+        this.x--;
+        this.setFlag(FLAGS6502.Z,  this.x == 0x00);
+        this.setFlag(FLAGS6502.N,  (this.x & 0x80) > 0);
+        return 0;
     }
 
-    DEY() {
+    private DEY(): number {
+        this.y--;
+        this.setFlag(FLAGS6502.Z,  this.y == 0x00);
+        this.setFlag(FLAGS6502.N,  (this.y & 0x80) > 0);
+        return 0;
     }
 
-    EOR() {
+    private EOR(): number {
+        this.fetch();
+        this.a = this.a ^ this.fetched;
+        this.setFlag(FLAGS6502.Z,  this.a == 0x00);
+        this.setFlag(FLAGS6502.N,  (this.a & 0x80) > 0);
+        return 1;
     }
 
-    INC() {
+    private INC(): number {
+        this.fetch();
+        const temp = this.fetched + 1;
+        this.write(this.addr_abs, temp & 0x00FF);
+        this.setFlag(FLAGS6502.Z,  (temp & 0x00FF) == 0x0000);
+        this.setFlag(FLAGS6502.N,  (temp & 0x0080) > 0);
+        return 0;
     }
 
-    INX() {
+    private INX(): number {
+        this.x++;
+        this.setFlag(FLAGS6502.Z,  this.x == 0x00);
+        this.setFlag(FLAGS6502.N,  (this.x & 0x80) > 0);
+        return 0;
     }
 
-    INY() {
+    private INY(): number {
+        this.y++;
+        this.setFlag(FLAGS6502.Z,  this.y == 0x00);
+        this.setFlag(FLAGS6502.N,  (this.y & 0x80) > 0);
+        return 0;
     }
 
-    JMP() {
+    private JMP(): number {
+        this.pc = this.addr_abs;
+        return 0;
     }
 
-    JSR() {
+    private JSR(): number {
+        this.pc--;
+
+        this.write(0x0100 + this.stkp, (this.pc >> 8) & 0x00FF);
+        this.stkp--;
+        this.write(0x0100 + this.stkp, this.pc & 0x00FF);
+        this.stkp--;
+
+        this.pc = this.addr_abs;
+        return 0;
     }
 
-    LDA() {
+    private LDA(): number {
+        this.fetch();
+        this.a = this.fetched;
+        this.setFlag(FLAGS6502.Z,  this.a === 0x00);
+        this.setFlag(FLAGS6502.N,  (this.a & 0x80) > 0);
+        return 1;
     }
 
-    LDX() {
+    private LDX(): number {
+        this.fetch();
+        this.x = this.fetched;
+        this.setFlag(FLAGS6502.Z,  this.x == 0x00);
+        this.setFlag(FLAGS6502.N,  (this.x & 0x80) > 0);
+        return 1;
     }
 
-    LDY() {
+    private LDY(): number {
+        this.fetch();
+        this.y = this.fetched;
+        this.setFlag(FLAGS6502.Z,  this.y == 0x00);
+        this.setFlag(FLAGS6502.N,  (this.y & 0x80) > 0);
+        return 1;
     }
 
-    LSR() {
+    private LSR(): number {
+        this.fetch();
+        this.setFlag(FLAGS6502.C,  (this.fetched & 0x0001) > 0);
+        const temp = this.fetched >> 1;
+        this.setFlag(FLAGS6502.Z,  (temp & 0x00FF) == 0x0000);
+        this.setFlag(FLAGS6502.N,  (temp & 0x0080) > 0);
+        if (this.lookup[this.opcode].addrmode === "IMP") {
+            this.a = temp & 0x00FF;
+        } else {
+            this.write(this.addr_abs, temp & 0x00FF);
+        }
+        return 0;
     }
 
-    NOP() {
+    private NOP(): number {
+        switch (this.opcode) {
+            case 0x1C:
+            case 0x3C:
+            case 0x5C:
+            case 0x7C:
+            case 0xDC:
+            case 0xFC:
+                return 1;
+                break;
+        }
+        return 0;
     }
 
-    ORA() {
+    private ORA(): number {
+        this.fetch();
+        this.a = this.a | this.fetched;
+        this.setFlag(FLAGS6502.Z,  this.a == 0x00);
+        this.setFlag(FLAGS6502.N,  (this.a & 0x80) > 0);
+        return 1;
     }
 
-    PHA() {
+    private PHA(): number {
+        this.write(0x0100 + this.stkp, this.a);
+        this.stkp--;
+        return 0;
     }
 
-    PHP() {
+    private PHP(): number {
+        this.write(0x0100 + this.stkp, this.status | FLAGS6502.B | FLAGS6502.U);
+        this.setFlag(FLAGS6502.B,  false);
+        this.setFlag(FLAGS6502.U,  false);
+        this.stkp--;
+        return 0;
     }
 
-    PLA() {
+    private PLA(): number {
+        this.stkp++;
+        this.a = this.read(0x0100 + this.stkp);
+        this.setFlag(FLAGS6502.Z,  this.a == 0x00);
+        this.setFlag(FLAGS6502.N,  (this.a & 0x80) > 0);
+        return 0;
     }
 
-    PLP() {
+    private PLP(): number {
+        this.stkp++;
+        this.status = this.read(0x0100 + this.stkp);
+        this.setFlag(FLAGS6502.U,  true);
+        return 0;
     }
 
-    ROL() {
+    private ROL(): number {
+        this.fetch();
+        const temp = (this.fetched << 1) | this.getFlag(FLAGS6502.C);
+        this.setFlag(FLAGS6502.C,  (temp & 0xFF00) > 0);
+        this.setFlag(FLAGS6502.Z,  (temp & 0x00FF) == 0x0000);
+        this.setFlag(FLAGS6502.N,  (temp & 0x0080) > 0);
+        if (this.lookup[this.opcode].addrmode === "IMP") {
+            this.a = temp & 0x00FF;
+        } else {
+            this.write(this.addr_abs, temp & 0x00FF);
+        }
+        return 0;
     }
 
-    ROR() {
+    private ROR(): number {
+        this.fetch();
+        const temp = (this.getFlag(FLAGS6502.C) << 7) | (this.fetched >> 1);
+        this.setFlag(FLAGS6502.C,  (this.fetched & 0x01) > 0);
+        this.setFlag(FLAGS6502.Z,  (temp & 0x00FF) == 0x00);
+        this.setFlag(FLAGS6502.N,  (temp & 0x0080) > 0);
+        if (this.lookup[this.opcode].addrmode === "IMP") {
+            this.a = temp & 0x00FF;
+        } else {
+            this.write(this.addr_abs, temp & 0x00FF);
+        }
+        return 0;
     }
 
     RTI() {
