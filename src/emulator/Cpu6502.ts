@@ -674,13 +674,45 @@ class Cpu6502 {
         return 0;
     }
 
-    RTI() {
+    private RTI(): number {
+        this.stkp++;
+        this.status = this.read(0x0100 + this.stkp);
+        this.status &= ~FLAGS6502.B;
+        this.status &= ~FLAGS6502.U;
+
+        this.stkp++;
+        this.pc = this.read(0x0100 + this.stkp);
+        this.stkp++;
+        this.pc |= this.read(0x0100 + this.stkp) << 8;
+        return 0;
     }
 
-    RTS() {
+    private RTS(): number {
+        this.stkp++;
+        this.pc = this.read(0x0100 + this.stkp);
+        this.stkp++;
+        this.pc |= this.read(0x0100 + this.stkp) << 8;
+
+        this.pc++;
+        return 0;
     }
 
-    SBC() {
+    private SBC(): number {
+        this.fetch();
+
+        // Operating in 16-bit domain to capture carry out
+
+        // We can invert the bottom 8 bits with bitwise xor
+        const value = this.fetched ^ 0x00FF;
+
+        // Notice this is exactly the same as addition from here!
+        const temp = this.a + value + this.getFlag(FLAGS6502.C);
+        this.setFlag(FLAGS6502.C, (temp & 0xFF00) > 0);
+        this.setFlag(FLAGS6502.Z, ((temp & 0x00FF) == 0));
+        this.setFlag(FLAGS6502.V, (temp ^ this.a & temp ^ value & 0x0080) > 0);
+        this.setFlag(FLAGS6502.N, (temp & 0x0080) > 0);
+        this.a = temp & 0x00FF;
+        return 1;
     }
 
     SEC() {
